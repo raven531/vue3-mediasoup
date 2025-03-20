@@ -1,20 +1,23 @@
-FROM node:18
+FROM node:20-slim
 
 WORKDIR /app
 
-RUN apt-get update
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+    build-essential \
+    python3 \
+    python3-pip \
+    ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
 
 COPY package.json .
 COPY package-lock.json .
 
-RUN npm i
+RUN npm install
 
 COPY src src
 COPY ssl ssl
 COPY public public
-
-EXPOSE 3016
-EXPOSE 10000-10100
 
 RUN npm i -g nodemon
 
