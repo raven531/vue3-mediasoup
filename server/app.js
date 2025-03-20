@@ -103,13 +103,24 @@ io.on('connection', (socket) => {
     });
 
     socket.on('getProducers', () => {
-        if (!socket.room_id) return;
+        if (!socket.room_id) {
+            console.warn('Room ID not set when getting producers');
+            return;
+        }
 
-        console.log('Get producers', { name: `${roomList.get(socket.room_id).getPeers().get(socket.id).name}` });
+        if (!roomList.has(socket.room_id)) {
+            console.warn(`Room ${socket.room_id} not found when getting producers`);
+            return;
+        }
+
+        const peer = roomList.get(socket.room_id).getPeers().get(socket.id);
+        const peerName = peer ? peer.name : 'unknown';
+        console.log('Get producers', { name: peerName });
 
         // Send all the current producers to the newly joined peer
         let producerList = roomList.get(socket.room_id).getProducerListForPeer();
 
+        console.log(`Sending ${producerList.length} producers to ${peerName}:`, producerList);
         socket.emit('newProducers', producerList);
     });
 
@@ -236,21 +247,63 @@ io.on('connection', (socket) => {
     });
 
     socket.on('disconnect', () => {
-        console.log('Disconnect', {
-            name: `${roomList.get(socket.room_id) && roomList.get(socket.room_id).getPeers().get(socket.id).name}`
-        });
+        // Safe access to room and peer information
+        const roomId = socket.room_id;
+        const peerName = roomId &&
+            roomList.has(roomId) &&
+            roomList.get(roomId).getPeers().has(socket.id) ?
+            roomList.get(roomId).getPeers().get(socket.id).name :
+            'undefined';
 
-        if (!socket.room_id) return;
+        console.log('Disconnect', { name: peerName });
 
-        roomList.get(socket.room_id).removePeer(socket.id);
+        // If no room id, nothing to clean up
+        if (!roomId) return;
+
+        // If room doesn't exist, nothing to clean up
+        if (!roomList.has(roomId)) return;
+
+        try {
+            // Remove the peer from the room
+            roomList.get(roomId).removePeer(socket.id);
+
+            // Check if room is empty and delete it if it is
+            if (roomList.get(roomId).getPeers().size === 0) {
+                console.log(`Room ${roomId} is empty, removing it`);
+                roomList.delete(roomId);
+            }
+        } catch (error) {
+            console.error('Error handling disconnect:', error);
+        }
     });
 
     socket.on('producerClosed', ({ producer_id }) => {
-        console.log('Producer close', {
-            name: `${roomList.get(socket.room_id) && roomList.get(socket.room_id).getPeers().get(socket.id).name}`
-        });
+        // Safe access to room and peer information
+        const roomId = socket.room_id;
+        const peerName = roomId &&
+            roomList.has(roomId) &&
+            roomList.get(roomId).getPeers().has(socket.id) ?
+            roomList.get(roomId).getPeers().get(socket.id).name :
+            'undefined';
 
-        roomList.get(socket.room_id).closeProducer(socket.id, producer_id);
+        console.log('Producer close', { name: peerName });
+
+        // Check if we can access the room
+        if (!roomId) {
+            console.warn('Room ID not set when closing producer');
+            return;
+        }
+
+        if (!roomList.has(roomId)) {
+            console.warn(`Room ${roomId} not found when closing producer`);
+            return;
+        }
+
+        try {
+            roomList.get(roomId).closeProducer(socket.id, producer_id);
+        } catch (error) {
+            console.error('Error closing producer:', error);
+        }
     });
 
     socket.on('exitRoom', async (_, callback) => {

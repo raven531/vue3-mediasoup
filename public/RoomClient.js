@@ -434,73 +434,133 @@ class RoomClient {
   }
 
   async consume(producer_id) {
-    //let info = await this.roomInfo()
+    console.log('Attempting to consume producer:', producer_id);
 
-    this.getConsumeStream(producer_id).then(
-      function ({ consumer, stream, kind }) {
-        this.consumers.set(consumer.id, consumer)
+    try {
+      // Get the consumer stream
+      const { consumer, stream, kind } = await this.getConsumeStream(producer_id);
 
-        let elem
-        if (kind === 'video') {
-          elem = document.createElement('video')
-          elem.srcObject = stream
-          elem.id = consumer.id
-          elem.playsinline = false
-          elem.autoplay = true
-          elem.className = 'vid'
-          this.remoteVideoEl.appendChild(elem)
-          this.handleFS(elem.id)
-        } else {
-          elem = document.createElement('audio')
-          elem.srcObject = stream
-          elem.id = consumer.id
-          elem.playsinline = false
-          elem.autoplay = true
-          this.remoteAudioEl.appendChild(elem)
-        }
+      // Store the consumer in our map
+      this.consumers.set(consumer.id, consumer);
 
-        consumer.on(
-          'trackended',
-          function () {
-            this.removeConsumer(consumer.id)
-          }.bind(this)
-        )
+      let elem;
+      if (kind === 'video') {
+        // Create video element for the remote stream
+        elem = document.createElement('video');
+        elem.srcObject = stream;
+        elem.id = consumer.id;
+        elem.playsinline = true;  // Better mobile compatibility
+        elem.autoplay = true;
+        elem.className = 'vid';
 
-        consumer.on(
-          'transportclose',
-          function () {
-            this.removeConsumer(consumer.id)
-          }.bind(this)
-        )
-      }.bind(this)
-    )
+        // Log information about the remote stream for debugging
+        console.log('Remote video stream details:', {
+          id: consumer.id,
+          kind: kind,
+          track: stream.getVideoTracks()[0]?.label || 'no track',
+          active: stream.active
+        });
+
+        // Add to remote video element and handle fullscreen
+        this.remoteVideoEl.appendChild(elem);
+        this.handleFS(elem.id);
+
+        // Force play the video (helps with autoplay restrictions)
+        elem.play().catch(error => {
+          console.warn('Error auto-playing video:', error);
+          // Try again after a short delay
+          setTimeout(() => {
+            elem.play().catch(e => console.error('Failed to play video on retry:', e));
+          }, 1000);
+        });
+      } else {
+        // Create audio element for the remote stream
+        elem = document.createElement('audio');
+        elem.srcObject = stream;
+        elem.id = consumer.id;
+        elem.playsinline = true;
+        elem.autoplay = true;
+
+        // Log information about the remote audio stream
+        console.log('Remote audio stream details:', {
+          id: consumer.id,
+          kind: kind,
+          track: stream.getAudioTracks()[0]?.label || 'no track',
+          active: stream.active
+        });
+
+        // Add to remote audio element
+        this.remoteAudioEl.appendChild(elem);
+
+        // Force play the audio (helps with autoplay restrictions)
+        elem.play().catch(error => {
+          console.warn('Error auto-playing audio:', error);
+          // Try again after a short delay
+          setTimeout(() => {
+            elem.play().catch(e => console.error('Failed to play audio on retry:', e));
+          }, 1000);
+        });
+      }
+
+      // Handle consumer track events
+      consumer.on('trackended', () => {
+        console.log('Consumer track ended:', consumer.id);
+        this.removeConsumer(consumer.id);
+      });
+
+      consumer.on('transportclose', () => {
+        console.log('Consumer transport closed:', consumer.id);
+        this.removeConsumer(consumer.id);
+      });
+
+    } catch (error) {
+      console.error('Error consuming producer:', error);
+    }
   }
 
   async getConsumeStream(producerId) {
-    const { rtpCapabilities } = this.device
-    const data = await this.socket.request('consume', {
-      rtpCapabilities,
-      consumerTransportId: this.consumerTransport.id, // might be
-      producerId
-    })
-    const { id, kind, rtpParameters } = data
+    console.log('Getting consume stream for producer:', producerId);
 
-    let codecOptions = {}
-    const consumer = await this.consumerTransport.consume({
-      id,
-      producerId,
-      kind,
-      rtpParameters,
-      codecOptions
-    })
+    try {
+      const { rtpCapabilities } = this.device;
 
-    const stream = new MediaStream()
-    stream.addTrack(consumer.track)
+      // Request to consume the producer from the server
+      const data = await this.socket.request('consume', {
+        rtpCapabilities,
+        consumerTransportId: this.consumerTransport.id,
+        producerId
+      });
 
-    return {
-      consumer,
-      stream,
-      kind
+      const { id, kind, rtpParameters } = data;
+      console.log('Received consumer data from server:', { id, kind });
+
+      // Create the consumer
+      const consumer = await this.consumerTransport.consume({
+        id,
+        producerId,
+        kind,
+        rtpParameters,
+        codecOptions: {}
+      });
+
+      console.log('Created consumer:', consumer.id);
+
+      // Create a MediaStream with the consumer's track
+      const stream = new MediaStream();
+      stream.addTrack(consumer.track);
+
+      // Resume the consumer to start receiving media
+      await this.socket.request('resume', { consumer_id: consumer.id });
+      console.log('Resumed consumer:', consumer.id);
+
+      return {
+        consumer,
+        stream,
+        kind
+      };
+    } catch (error) {
+      console.error('Error in getConsumeStream:', error);
+      throw error;
     }
   }
 
@@ -565,13 +625,29 @@ class RoomClient {
   }
 
   removeConsumer(consumer_id) {
-    let elem = document.getElementById(consumer_id)
-    elem.srcObject.getTracks().forEach(function (track) {
-      track.stop()
-    })
-    elem.parentNode.removeChild(elem)
+    console.log('Removing consumer:', consumer_id);
 
-    this.consumers.delete(consumer_id)
+    // Find the element by consumer_id
+    let elem = document.getElementById(consumer_id);
+    if (!elem) {
+      console.warn('Element not found for consumer:', consumer_id);
+      return;
+    }
+
+    // Stop all tracks in the stream
+    if (elem.srcObject) {
+      elem.srcObject.getTracks().forEach(track => {
+        track.stop();
+      });
+      elem.srcObject = null;
+    }
+
+    // Remove the element from the DOM
+    elem.parentNode.removeChild(elem);
+
+    // Delete from consumers map
+    this.consumers.delete(consumer_id);
+    console.log('Consumer removed:', consumer_id);
   }
 
   exit(offline = false) {

@@ -57,9 +57,11 @@ module.exports = class Peer {
         let consumerTransport = this.transports.get(consumer_transport_id);
 
         if (!consumerTransport) {
-            console.error(`Consumer transport with id ${consumer_transport_id} not found`);
+            console.error(`Consumer transport with id ${consumer_transport_id} not found for peer ${this.id}`);
             throw new Error(`Consumer transport with id ${consumer_transport_id} not found`);
         }
+
+        console.log(`Creating consumer for peer ${this.name} on transport ${consumer_transport_id}`);
 
         let consumer = null;
         try {
@@ -68,26 +70,38 @@ module.exports = class Peer {
                 rtpCapabilities,
                 paused: true // Set paused to true so we can call resume once we've created it
             });
+            console.log(`Consumer ${consumer.id} created successfully for peer ${this.name}`);
         } catch (error) {
-            console.error('Consume failed', error);
-            return;
+            console.error(`Failed to create consumer for peer ${this.name}:`, error);
+            throw error;
         }
 
         this.consumers.set(consumer.id, consumer);
+        console.log(`Peer ${this.name} now has ${this.consumers.size} consumers`);
 
         consumer.on(
             'transportclose',
             function () {
-                console.log('Consumer transport close', { name: `${this.name}`, consumer_id: `${consumer.id}` });
+                console.log('Consumer transport close', {
+                    name: `${this.name}`,
+                    consumer_id: `${consumer.id}`,
+                    transport_id: consumer_transport_id
+                });
                 this.consumers.delete(consumer.id);
+                console.log(`Consumer ${consumer.id} removed from peer ${this.name}`);
             }.bind(this)
         );
 
         consumer.on(
             'producerclose',
             function () {
-                console.log('Consumer producer close', { name: `${this.name}`, consumer_id: `${consumer.id}` });
+                console.log('Consumer producer close', {
+                    name: `${this.name}`,
+                    consumer_id: `${consumer.id}`,
+                    producer_id: producer_id
+                });
                 this.consumers.delete(consumer.id);
+                console.log(`Consumer ${consumer.id} removed from peer ${this.name}`);
             }.bind(this)
         );
 
@@ -106,22 +120,39 @@ module.exports = class Peer {
 
     async resumeConsumer(consumer_id) {
         if (!this.consumers.has(consumer_id)) {
-            console.error(`Consumer with id ${consumer_id} not found`);
+            console.error(`Consumer with id ${consumer_id} not found for peer ${this.name}`);
             throw new Error(`Consumer with id ${consumer_id} not found`);
         }
 
-        const consumer = this.consumers.get(consumer_id);
-        await consumer.resume();
-        return consumer;
+        try {
+            const consumer = this.consumers.get(consumer_id);
+            console.log(`Resuming consumer ${consumer_id} for peer ${this.name}`);
+            await consumer.resume();
+            console.log(`Consumer ${consumer_id} resumed successfully for peer ${this.name}`);
+            return consumer;
+        } catch (error) {
+            console.error(`Error resuming consumer ${consumer_id} for peer ${this.name}:`, error);
+            throw error;
+        }
     }
 
     closeProducer(producer_id) {
-        try {
-            this.producers.get(producer_id).close();
-        } catch (e) {
-            console.warn(e);
+        // Check if producer exists
+        if (!this.producers.has(producer_id)) {
+            console.warn(`Producer ${producer_id} not found for peer ${this.id}`);
+            return;
         }
 
+        try {
+            // Get the producer and close it
+            const producer = this.producers.get(producer_id);
+            producer.close();
+            console.log(`Producer ${producer_id} closed for peer ${this.id}`);
+        } catch (error) {
+            console.error(`Error closing producer ${producer_id}:`, error);
+        }
+
+        // Always remove from the map, even if there was an error
         this.producers.delete(producer_id);
     }
 

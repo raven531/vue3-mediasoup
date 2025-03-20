@@ -28,13 +28,22 @@ module.exports = class Room {
 
     getProducerListForPeer() {
         let producerList = [];
+        console.log('Getting producer list for peer. Current peers:', this.peers.size);
+
         this.peers.forEach((peer) => {
+            console.log(`Peer ${peer.name} has ${peer.producers.size} producers`);
             peer.producers.forEach((producer) => {
+                console.log(`Adding producer ${producer.id} from peer ${peer.name}`);
                 producerList.push({
-                    producer_id: producer.id
+                    producer_id: producer.id,
+                    producer_socket_id: peer.id,
+                    producer_name: peer.name,
+                    kind: producer.kind
                 });
             });
         });
+
+        console.log('Final producer list:', producerList);
         return producerList;
     }
 
@@ -149,6 +158,8 @@ module.exports = class Room {
     }
 
     async consume(socket_id, consumer_transport_id, producer_id, rtpCapabilities) {
+        console.log(`Socket ${socket_id} consuming producer ${producer_id}`);
+
         // Make sure router is initialized
         if (!this.router) {
             await this._waitForRouter();
@@ -161,6 +172,21 @@ module.exports = class Room {
         }
 
         const peer = this.peers.get(socket_id);
+        console.log(`Creating consumer for peer ${peer.name} (${socket_id})`);
+
+        // Find producer
+        let producer = null;
+        for (let p of this.peers.values()) {
+            if (p.producers.has(producer_id)) {
+                producer = p.getProducer(producer_id);
+                break;
+            }
+        }
+
+        if (!producer) {
+            console.warn(`Producer ${producer_id} not found`);
+            throw new Error(`Producer ${producer_id} not found`);
+        }
 
         // Make sure the peer can consume the producer
         if (!this.router.canConsume({
@@ -171,21 +197,26 @@ module.exports = class Room {
                 socket_id,
                 consumer_transport_id,
                 producer_id,
+                rtpCapabilities
             });
             throw new Error('Cannot consume');
         }
 
-        // Create the consumer
-        const { consumer, params } = await peer.createConsumer(
-            consumer_transport_id,
-            producer_id,
-            rtpCapabilities
-        );
+        try {
+            // Create the consumer
+            const { consumer, params } = await peer.createConsumer(
+                consumer_transport_id,
+                producer_id,
+                rtpCapabilities
+            );
 
-        // Send consumer created event to the peer
-        this.send(socket_id, 'consumerCreated', params);
+            console.log(`Consumer ${consumer.id} created successfully for peer ${peer.name}`);
 
-        return params;
+            return params;
+        } catch (error) {
+            console.error(`Error creating consumer for peer ${peer.name}:`, error);
+            throw error;
+        }
     }
 
     async removePeer(socket_id) {
@@ -199,12 +230,27 @@ module.exports = class Room {
     }
 
     closeProducer(socket_id, producer_id) {
+        // Check if peer exists
         if (!this.peers.has(socket_id)) {
             console.warn(`Peer with ID ${socket_id} not found when closing producer`);
             return;
         }
 
-        this.peers.get(socket_id).closeProducer(producer_id);
+        try {
+            const peer = this.peers.get(socket_id);
+
+            // Check if producer exists for this peer
+            if (!peer.producers.has(producer_id)) {
+                console.warn(`Producer ${producer_id} not found for peer ${socket_id}`);
+                return;
+            }
+
+            // Close the producer
+            peer.closeProducer(producer_id);
+            console.log(`Producer ${producer_id} closed for peer ${socket_id}`);
+        } catch (error) {
+            console.error(`Error closing producer ${producer_id}:`, error);
+        }
     }
 
     broadCast(socket_id, name, data) {
