@@ -15,6 +15,7 @@ COPY package-lock.json .
 
 RUN npm install
 
+COPY server server
 COPY src src
 COPY ssl ssl
 COPY public public
